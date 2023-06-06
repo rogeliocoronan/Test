@@ -1,49 +1,160 @@
-# History files
-.Rhistory
-.Rapp.history
+##################################################################################################################
+######################################
+###
+###  1. Libraries and input data
+###
+######################################
+library(raster)
+rasterOptions(maxmemory = 30e+09, chunksize = 6e+10, tmpdir = "D:/TempsR", memfrac=0.8)
+path.IIASA <- "D:/C/escritorio/academia/Aplicaciones/IIASA/Examen/"
+#######
+#
+Wheat.yield.05 <- raster(paste0(path.IIASA, "00_Data/SPAM_2005_v3.2/SPAM2005V3r2_global_Y_TA_WHEA_A.tif"))
+Wheat.harvest.05 <- raster(paste0(path.IIASA, "00_Data/SPAM_2005_v3.2/SPAM2005V3r2_global_A_TA_WHEA_A.tif"))
+Countries <- shapefile("D:/Cartografia/Global/varias_clasificar/World_Countries_(Generalized)/World_Countries__Generalized_.shp")
+#Countries.IIASA <- shapefile(paste0(path.IIASA, "00_Data/GAUL/g2015_2005_2.shp"))
+NUE <- read.csv(paste0(path.IIASA, "00_Data/NUE_Zhang_et_al_2015/Country_NUE_assumption.csv"), sep=",", header=T)
 
-# Session Data files
-.RData
-.RDataTmp
+######################################
+###
+###  I.1 Wheat production in million tons (Mt)
+###
+######################################
+Wheat.Vol <- (Wheat.yield.05 * Wheat.harvest.05)/1000000
+    writeRaster(Wheat.Vol, paste0(path.IIASA, "03_Data_export/01_Wheath_Mt.tif"), overwrite=T)
 
-# User-specific files
-.Ruserdata
+    
+    
+######################################
+###
+###  I.2 Production per Country
+###
+######################################
+Countries$SHAPE_Leng   <- NULL; Countries$SHAPE_Area   <- NULL; Countries$AFF_ISO <- NULL
+#   
+Product.country <-  extract(Wheat.Vol, Countries, fun = sum, na.rm = TRUE, overwrite=TRUE)   
+    Countries$Wheat <- Product.country
+#  
+Country_aggr <- aggregate(Countries$Wheat, by=list(Countries$COUNTRYAFF), FUN=sum)
+      names(Country_aggr) <- c("Country", "Wheat_Mt")                  
+#                       
+write.csv(Country_aggr, paste0(path.IIASA, "03_Data_export/02_Wheat_Prodct_Country.csv")) 
 
-# Example code in package build process
-*-Ex.R
 
-# Output files from R CMD build
-/*.tar.gz
 
-# Output files from R CMD check
-/*.Rcheck/
+######################################
+###
+###  I.3 N output in harvested wheat yield
+###
+######################################
+N_output <- Wheat.Vol * 0.02 #assuming that 2% of harvested wheat yield consists of nitrogen (N) element
+    writeRaster(N_output, paste0(path.IIASA, "03_Data_export/03_N_output_Mt.tif"), overwrite=T)
+#######
+# Export figures
+tiff(paste0(path.IIASA, "02_Figures/03_N_output_Mt.tif"), width = 22, height = 12, units = "cm", res=400)  
+#
+    par(mfrow=c(1,2))
+    par(cex = 0.80) 
+    par(tcl = -0.25) 
+    par(mgp = c(1.8, 0.6, 0))
+    par(mar = c(3.2, 3.1, 0.6, 0.6),
+        oma = c(0, 0, 0, 0.5)) #para una figura sola como un todo  / mar= inferior, derecho, arriba, izquierda
+###    
+hist(Country_aggr$Wheat_Mt * 0.02, main="", xlab="N output in harvested wheat (MtN)", breaks = sqrt(nrow(Country_aggr)),
+             ylab = "Number of countries", ylim=c(0,200))
+box()
+    text(150,200,"(a)")
+#
+boxplot(Country_aggr$Wheat_Mt * 0.02, outline=T, xlab="World" , ylab="N output in harvested wheat (MtN) per country")
+    text(0.6, 1250,"(b)") #Excluding outiers
+  
+###
+dev.off()
 
-# RStudio files
-.Rproj.user/
 
-# produced vignettes
-vignettes/*.html
-vignettes/*.pdf
 
-# OAuth2 token, see https://github.com/hadley/httr/releases/tag/v0.3
-.httr-oauth
+######################################
+###
+###  I.4 a. estimate for the 10 biggest wheat producers the country-level values of N output in harvested wheat,
+###
+######################################
+# the Original names reported in the NUE were adjusted to align with the names in the Country shapefile
+#
+NUE.Wheat.Country <- read.csv(paste0(path.IIASA, "00_Data/NUE_Zhang_et_al_2015/Country_NUE_assumption_adj.csv"))
+NUE.Wheat.Country$Harvest_N <- NUE.Wheat.Country$Wheat_Mt * 0.02 /100
+#
+NUE.Wheat.Country$N_input <- NUE.Wheat.Country$Harvest_N/ NUE.Wheat.Country$NUE
+NUE.Wheat.Country$N_surplus <- NUE.Wheat.Country$N_input - NUE.Wheat.Country$Harvest_N
+#
+# The 10 biggest wheat producers the country-level values of N output in harvested wheat
+attach(NUE.Wheat.Country)
+Top10.Count.Nharv <- NUE.Wheat.Country[order(-(Harvest_N)),][1:10,]
+detach(NUE.Wheat.Country)
+#
+write.csv(Top10.Count.Nharv, paste0(path.IIASA, "03_Data_export/04_Top10_Country_NHarv_input_surpl.csv")) 
+###
+######################################
+######################################
+###  Preparing data for figure
+######################################
+######################################
+lm.N <- lm(N_surplus ~ Harvest_N, data=Top10.Count.Nharv)
 
-# knitr and R markdown default cache directories
-*_cache/
-/cache/
+new.data <- data.frame(seq(0, 15, length.out=20))
+names(new.data) <- "Harvest_N"
+preds <- predict(lm.N, newdata = data.frame(x=new.data), interval = 'confidence')
+#
+##########
+pdf(paste0(path.IIASA, "02_Figures/04_Top10_HarvSurpN.pdf"), width = 5, height = 5)  
+#
+plot(Top10.Count.Nharv$Harvest_N, Top10.Count.Nharv$N_surplus, xlab="Harvested N", ylab="N surplus",
+     xlim=c(0,15), ylim=c(0,40))
+#
+polygon(c(rev(new.data$Harvest_N), new.data$Harvest_N), c(rev(preds[ ,3]), preds[ ,2]), col = 'grey', border = NA)
+#
+abline(lm.N, col='black')
+lines(new.data$Harvest_N, preds[ ,3], lty = 'dashed', col = 'black')
+lines(new.data$Harvest_N, preds[ ,2], lty = 'dashed', col = 'black')
+points(Top10.Count.Nharv$Harvest_N, Top10.Count.Nharv$N_surplus)
+#
+text(Top10.Count.Nharv$Harvest_N+1, Top10.Count.Nharv$N_surplus-1, labels=Top10.Count.Nharv$Country.New,
+     col="red", cex=0.7)
 
-# Temporary files created by R markdown
-*.utf8.md
-*.knit.md
+# figure (plot to be exported as pdf)
+dev.off()
 
-# R Environment Variables
-.Renviron
+###########################################
+######  Global Analysis
+###########################################
+All.Countries <- NUE.Wheat.Country[order(-(Harvest_N)),]
 
-# pkgdown site
-docs/
+plot(All.Countries$Wheat_Mt, All.Countries$N_surplus)
+lm.all <- lm(All.Countries$N_surplus ~ All.Countries$Wheat_Mt)
+summary(lm.all)
+#
+plot(All.Countries$NUE, All.Countries$Wheat_Mt)
+lm.all <- lm(All.Countries$Wheat_Mt ~ All.Countries$NUE)
+summary(lm.all)
+#
+plot(All.Countries$NUE, All.Countries$N_surplus)
+lm.all <- lm(All.Countries$N_surplus ~ All.Countries$NUE)
+summary(lm.all)
 
-# translation temp files
-po/*~
+###########################################
+######  Top 10 Countries Analysis
+###########################################
+plot(Top10.Count.Nharv$Wheat_Mt, Top10.Count.Nharv$N_surplus)
+lm.all <- lm(Top10.Count.Nharv$N_surplus ~ Top10.Count.Nharv$Wheat_Mt)
+summary(lm.all)
+#
+plot(Top10.Count.Nharv$NUE, Top10.Count.Nharv$Wheat_Mt)
+lm.all <- lm(Top10.Count.Nharv$Wheat_Mt ~ Top10.Count.Nharv$NUE)
+summary(lm.all)
+#
+plot(Top10.Count.Nharv$NUE, Top10.Count.Nharv$N_surplus)
+lm.all <- lm(Top10.Count.Nharv$N_surplus ~ Top10.Count.Nharv$NUE)
+summary(lm.all)
 
-# RStudio Connect folder
-rsconnect/
+
+
+    
